@@ -58,7 +58,7 @@ typedef struct {
     git_stream *io;
     int owned;
     bool connected;
-    char *host;
+    wchar_t *host_w;
 
     schannel_state state;
 
@@ -126,8 +126,8 @@ static int connect_context(schannel_stream *st)
 
 	    printf("input data: %d\n", st->ciphertext_in.size);
 
-	    status = InitializeSecurityContextA(
-		    &st->cred, retries ? &st->context : NULL, st->host,
+	    status = InitializeSecurityContextW(
+		    &st->cred, retries ? &st->context : NULL, st->host_w,
 		    context_flags, 0, 0, retries ? &input_buf_desc : NULL, 0,
 		    retries ? NULL : &st->context, &output_buf_desc,
 		    &context_flags, NULL);
@@ -229,6 +229,116 @@ static int connect_context(schannel_stream *st)
     return error;
 }
 
+static int set_certificate_lookup_error(DWORD status)
+{
+    switch (status) {
+    case CERT_TRUST_IS_NOT_TIME_VALID:
+	    git_error_set(GIT_ERROR_SSL, "certificate is expired or not yet valid");
+	    break;
+    case CERT_TRUST_IS_REVOKED:
+	    git_error_set(GIT_ERROR_SSL, "certificate is revoked");
+	    break;
+    case CERT_TRUST_IS_NOT_SIGNATURE_VALID:
+    case CERT_TRUST_IS_NOT_VALID_FOR_USAGE:
+    case CERT_TRUST_INVALID_EXTENSION:
+    case CERT_TRUST_INVALID_POLICY_CONSTRAINTS:
+    case CERT_TRUST_INVALID_BASIC_CONSTRAINTS:
+    case CERT_TRUST_INVALID_NAME_CONSTRAINTS:
+    case CERT_TRUST_HAS_NOT_SUPPORTED_NAME_CONSTRAINT:
+    case CERT_TRUST_HAS_NOT_DEFINED_NAME_CONSTRAINT:
+    case CERT_TRUST_HAS_NOT_PERMITTED_NAME_CONSTRAINT:
+    case CERT_TRUST_HAS_EXCLUDED_NAME_CONSTRAINT:
+    case CERT_TRUST_NO_ISSUANCE_CHAIN_POLICY:
+    case CERT_TRUST_HAS_NOT_SUPPORTED_CRITICAL_EXT:
+	    git_error_set(GIT_ERROR_SSL, "certificate is not valid");
+	    break;
+    case CERT_TRUST_IS_UNTRUSTED_ROOT:
+    case CERT_TRUST_IS_CYCLIC:
+    case CERT_TRUST_IS_EXPLICIT_DISTRUST:
+	    git_error_set(GIT_ERROR_SSL, "certificate is not trusted");
+	    break;
+    case CERT_TRUST_REVOCATION_STATUS_UNKNOWN:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "certificate revocation status could not be verified");
+	    break;
+    case CERT_TRUST_IS_OFFLINE_REVOCATION:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "certificate revocation is offline or stale");
+	    break;
+    case CERT_TRUST_HAS_WEAK_SIGNATURE:
+	    git_error_set(GIT_ERROR_SSL, "certificate has a weak signature");
+	    break;
+    default:
+	    git_error_set(
+		    GIT_ERROR_SSL, "unknown certificate lookup failure: %d", status);
+	    return -1;
+    }
+
+    return GIT_ECERTIFICATE;
+}
+
+static int set_certificate_validation_error(DWORD status)
+{
+    switch (status) {
+    case TRUST_E_CERT_SIGNATURE:
+	    git_error_set(GIT_ERROR_SSL, "the certificate cannot be verified");
+	    break;
+    case CRYPT_E_REVOKED:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "the certificate or signature has been revoked");
+	    break;
+    case CERT_E_UNTRUSTEDROOT:
+	    git_error_set(GIT_ERROR_SSL, "the certificate root is not trusted");
+	    break;
+    case CERT_E_UNTRUSTEDTESTROOT:
+	    git_error_set(GIT_ERROR_SSL, "the certificate root is a test certificate");
+	    break;
+    case CERT_E_CHAINING:
+	    git_error_set(GIT_ERROR_SSL, "the certificate chain is invalid");
+	    break;
+    case CERT_E_WRONG_USAGE:
+    case CERT_E_PURPOSE:
+	    git_error_set(GIT_ERROR_SSL, "the certificate is not valid for this usage");
+	    break;
+    case CERT_E_EXPIRED:
+	    git_error_set(GIT_ERROR_SSL, "certificate is expired or not yet valid");
+	    break;
+    case CERT_E_INVALID_NAME:
+    case CERT_E_CN_NO_MATCH:
+	    git_error_set(GIT_ERROR_SSL, "certificate is not valid for this hostname");
+	    break;
+    case CERT_E_INVALID_POLICY:
+    case TRUST_E_BASIC_CONSTRAINTS:
+    case CERT_E_CRITICAL:
+    case CERT_E_VALIDITYPERIODNESTING:
+	    git_error_set(GIT_ERROR_SSL, "certificate is not valid");
+	    break;
+    case CRYPT_E_NO_REVOCATION_CHECK:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "certificate revocation status could not be verified");
+	    break;
+    case CRYPT_E_REVOCATION_OFFLINE:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "certificate revocation is offline or stale");
+	    break;
+    case CERT_E_ROLE:
+	    git_error_set(GIT_ERROR_SSL, "certificate authority is not valid");
+	    break;
+    default:
+	    git_error_set(
+		    GIT_ERROR_SSL,
+		    "unknown certificate policy checking failure: %d", status);
+	    return -1;
+    }
+
+    return GIT_ECERTIFICATE;
+}
+
 static int check_certificate(schannel_stream* st)
 {
     const CERT_CONTEXT *certificate;
@@ -252,43 +362,22 @@ static int check_certificate(schannel_stream* st)
 
     st->state = STATE_CERTIFICATE;
 
-    switch (st->cert_chain->TrustStatus.dwErrorStatus) {
-    case CERT_TRUST_NO_ERROR:
-	    error = 0;
-	    break;
-    case CERT_TRUST_IS_NOT_TIME_VALID:
-	    git_error_set(GIT_ERROR_SSL, "certificate time is not yet valid");
-	    error = GIT_ECERTIFICATE;
-	    break;
-    default:
-	    git_error_set(GIT_ERROR_SSL, "unknown certificate lookup failure: %d", st->cert_chain->TrustStatus.dwErrorStatus);
-	    error = -1;
-	    break;
-    }
-
-    if (error)
-	    return error;
+    if (st->cert_chain->TrustStatus.dwErrorStatus != CERT_TRUST_NO_ERROR)
+	return set_certificate_lookup_error(st->cert_chain->TrustStatus.dwErrorStatus);
 
     ssl_policy_parameters.cbSize = sizeof(SSL_EXTRA_CERT_CHAIN_POLICY_PARA);
     ssl_policy_parameters.dwAuthType = AUTHTYPE_SERVER;
-    ssl_policy_parameters.pwszServerName = L"wrong.host.badssl.com";
+    ssl_policy_parameters.pwszServerName = st->host_w;
 
     if (!CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, st->cert_chain, &cert_policy_parameters, &cert_policy_status)) {
 	    git_error_set(GIT_ERROR_OS, "could not verify certificate chain policy");
 	    return -1;
     }
 
-    switch (cert_policy_status.dwError) {
-    case 0:
-	    error = 0;
-	    break;
-    default:
-	    git_error_set(GIT_ERROR_SSL, "unknown certificate policy checking failure: %d", cert_policy_status.dwError);
-	    error = -1;
-	    break;
-    }
+    if (cert_policy_status.dwError != SEC_E_OK)
+	    return set_certificate_validation_error(cert_policy_status.dwError);
 
-    return error;
+    return 0;
 }
 
 static int schannel_connect(git_stream *stream)
@@ -548,6 +637,9 @@ static void schannel_free(git_stream *stream)
 {
     schannel_stream *st = (schannel_stream *)stream;
 
+    if (st->state >= STATE_CERTIFICATE)
+	CertFreeCertificateChain(st->cert_chain);
+
     if (st->state >= STATE_CONTEXT)
 	DeleteSecurityContext(&st->context);
 
@@ -559,7 +651,7 @@ static void schannel_free(git_stream *stream)
     git_str_dispose(&st->ciphertext_in);
     git_str_dispose(&st->plaintext_in);
 
-    git__free(st->host);
+    git__free(st->host_w);
     git__free(st);
 }
 
@@ -577,8 +669,10 @@ static int schannel_stream_wrap(
     st->io = in;
     st->owned = owned;
 
-    st->host = git__strdup(host);
-    GIT_ERROR_CHECK_ALLOC(st->host);
+    if (git__utf8_to_16_alloc(&st->host_w, host) < 0) {
+	git__free(st);
+	return -1;
+    }
 
     st->parent.version = GIT_STREAM_VERSION;
     st->parent.encrypted = 1;
