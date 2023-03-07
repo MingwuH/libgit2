@@ -50,6 +50,7 @@ typedef enum {
     STATE_NONE = 0,
     STATE_CRED = 1,
     STATE_CONTEXT = 2,
+    STATE_CERTIFICATE = 3
 } schannel_state;
 
 typedef struct {
@@ -64,14 +65,14 @@ typedef struct {
     CredHandle cred;
     CtxtHandle context;
     SecPkgContext_StreamSizes stream_sizes;
+    CERT_CHAIN_CONTEXT *cert_chain;
 
     git_str plaintext_in;
     git_str ciphertext_in;
 } schannel_stream;
 
-static int schannel_connect(git_stream *stream)
+static int connect_context(schannel_stream *st)
 {
-    schannel_stream *st = (schannel_stream *)stream;
     SCHANNEL_CRED cred = { 0 };
     SECURITY_STATUS status = SEC_E_INTERNAL_ERROR;
     DWORD context_flags;
@@ -83,35 +84,39 @@ static int schannel_connect(git_stream *stream)
     ssize_t read_len;
     int error = 0;
 
-    GIT_ASSERT(st->state == STATE_NONE);
-
     if (st->owned && (error = git_stream_connect(st->io)) < 0)
 	    return error;
 
     cred.dwVersion = SCHANNEL_CRED_VERSION;
-    cred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS;
+    cred.dwFlags = SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
+	           SCH_CRED_IGNORE_REVOCATION_OFFLINE |
+	           SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS |
+	           SCH_CRED_NO_SERVERNAME_CHECK;
     cred.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_3_CLIENT;
     cred.dwMinimumCipherStrength = 128; // TODO
 
     /* TODO: do we need to pass an expiry timestamp? */
-    if (AcquireCredentialsHandleW(NULL, SCHANNEL_NAME_W, SECPKG_CRED_OUTBOUND, NULL, &cred, NULL, NULL, &st->cred, NULL) != SEC_E_OK) {
+    if (AcquireCredentialsHandleW(
+	        NULL, SCHANNEL_NAME_W, SECPKG_CRED_OUTBOUND, NULL, &cred, NULL,
+	        NULL, &st->cred, NULL) != SEC_E_OK) {
 	    git_error_set(GIT_ERROR_OS, "could not acquire credentials handle");
 	    return -1;
     }
 
     st->state = STATE_CRED;
 
-    context_flags = ISC_REQ_ALLOCATE_MEMORY |
-                        ISC_REQ_CONFIDENTIALITY |
-                        ISC_REQ_REPLAY_DETECT |
-                        ISC_REQ_SEQUENCE_DETECT |
-                        ISC_REQ_STREAM;
+    context_flags = ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_CONFIDENTIALITY |
+	            ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT |
+	            ISC_REQ_STREAM;
 
     /* TODO: convert host to wchar and use W method */
     /* TODO: do we need to pass an expiry timestamp? (last arg) */
     for (retries = 0; retries < MAX_RETRIES; retries++) {
-	    SecBuffer input_buf[] = { { (unsigned long)st->ciphertext_in.size, SECBUFFER_TOKEN, st->ciphertext_in.size ? st->ciphertext_in.ptr : NULL },
-			              { 0, SECBUFFER_EMPTY, NULL } };
+	    SecBuffer input_buf[] = {
+		    { (unsigned long)st->ciphertext_in.size, SECBUFFER_TOKEN,
+		      st->ciphertext_in.size ? st->ciphertext_in.ptr : NULL },
+		    { 0, SECBUFFER_EMPTY, NULL }
+	    };
 	    SecBuffer output_buf[] = { { 0, SECBUFFER_TOKEN, NULL },
 			               { 0, SECBUFFER_ALERT, NULL } };
 
@@ -123,10 +128,9 @@ static int schannel_connect(git_stream *stream)
 
 	    status = InitializeSecurityContextA(
 		    &st->cred, retries ? &st->context : NULL, st->host,
-		    context_flags, 0, 0, retries ? &input_buf_desc : NULL,
-		    0, retries ? NULL : &st->context, &output_buf_desc,
+		    context_flags, 0, 0, retries ? &input_buf_desc : NULL, 0,
+		    retries ? NULL : &st->context, &output_buf_desc,
 		    &context_flags, NULL);
-
 
 	    if (status == SEC_E_OK || status == SEC_I_CONTINUE_NEEDED) {
 		    st->state = STATE_CONTEXT;
@@ -139,9 +143,7 @@ static int schannel_connect(git_stream *stream)
 			    FreeContextBuffer(output_buf[0].pvBuffer);
 		    }
 
-
-
-		/* handle any leftover, unprocessed data */
+		    /* handle any leftover, unprocessed data */
 		    if (input_buf[1].BufferType == SECBUFFER_EXTRA) {
 			    GIT_ASSERT(
 				    st->ciphertext_in.size >
@@ -161,43 +163,36 @@ static int schannel_connect(git_stream *stream)
 			    printf("len: %d\n", st->ciphertext_in.size);
 		    }
 
-
-
-
-
 		    if (error < 0 || status == SEC_E_OK)
 			    break;
 	    } else if (status == SEC_E_INCOMPLETE_MESSAGE) {
-			    /* we need additional data from the client; */
-			    if (git_str_grow_by(
-				        &st->ciphertext_in, READ_BLOCKSIZE) <
-				0) {
-				    error = -1;
-				    break;
-			    }
+		    /* we need additional data from the client; */
+		    if (git_str_grow_by(&st->ciphertext_in, READ_BLOCKSIZE) <
+			0) {
+			    error = -1;
+			    break;
+		    }
 
-			    printf(" pre-read: input data: %d\n",
-				   st->ciphertext_in.size);
+		    printf(" pre-read: input data: %d\n",
+			   st->ciphertext_in.size);
 
-			    if ((read_len = git_stream_read(
-				         st->io,
-				         st->ciphertext_in.ptr +
-				                 st->ciphertext_in.size,
-				         (st->ciphertext_in.asize -
-				          st->ciphertext_in.size))) < 0) {
-				    error = -1;
-				    break;
-			    }
+		    if ((read_len = git_stream_read(
+			         st->io,
+			         st->ciphertext_in.ptr + st->ciphertext_in.size,
+			         (st->ciphertext_in.asize -
+			          st->ciphertext_in.size))) < 0) {
+			    error = -1;
+			    break;
+		    }
 
-			    GIT_ASSERT(
-				    (size_t)read_len <=
-				    st->ciphertext_in.asize -
-				            st->ciphertext_in.size);
-			    st->ciphertext_in.size += read_len;
-			    printf("     read: %d\n", read_len);
-			    printf("post-read: input data: %d\n",
-				   st->ciphertext_in.size);
-		    
+		    GIT_ASSERT(
+			    (size_t)read_len <=
+			    st->ciphertext_in.asize - st->ciphertext_in.size);
+		    st->ciphertext_in.size += read_len;
+		    printf("     read: %d\n", read_len);
+		    printf("post-read: input data: %d\n",
+			   st->ciphertext_in.size);
+
 	    } else {
 		    printf("yikes: %x\n", status);
 
@@ -219,16 +214,96 @@ static int schannel_connect(git_stream *stream)
     }
 
     if (!error) {
-	if (QueryContextAttributesW(&st->context, SECPKG_ATTR_STREAM_SIZES, &st->stream_sizes) != SEC_E_OK) {
-		    git_error_set(GIT_ERROR_SSL, "could not query stream sizes");
-		error = -1;
-	}
+	    if (QueryContextAttributesW(
+		        &st->context, SECPKG_ATTR_STREAM_SIZES,
+		        &st->stream_sizes) != SEC_E_OK) {
+		    git_error_set(
+			    GIT_ERROR_SSL, "could not query stream sizes");
+		    error = -1;
+	    }
     }
 
-    printf("error is: %d, status is: %d (%d)\n", error, status, (status == SEC_I_CONTINUE_NEEDED));
+    printf("error is: %d, status is: %d (%d)\n", error, status,
+	   (status == SEC_I_CONTINUE_NEEDED));
 
-    st->connected = (error == 0);
     return error;
+}
+
+static int check_certificate(schannel_stream* st)
+{
+    const CERT_CONTEXT *certificate;
+    CERT_CHAIN_PARA cert_chain_parameters = { sizeof(CERT_CHAIN_PARA), 0 };
+    SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_policy_parameters;
+    CERT_CHAIN_POLICY_PARA cert_policy_parameters = { sizeof(CERT_CHAIN_POLICY_PARA), 0, &ssl_policy_parameters };
+    CERT_CHAIN_POLICY_STATUS cert_policy_status;
+    int error = -1;
+
+    if (QueryContextAttributesW(&st->context, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &certificate) != SEC_E_OK) {
+	    git_error_set(GIT_ERROR_OS, "could not query remote certificate context");
+	    return -1;
+    }
+
+    /* TODO: do we really want to do revokcation checking ? */
+    /* TODO: free cert_chain */
+    if (!CertGetCertificateChain(NULL, certificate, NULL, certificate->hCertStore, &cert_chain_parameters, CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, NULL, &st->cert_chain)) {
+	    git_error_set(GIT_ERROR_OS, "could not query remote certificate chain");
+	    return -1;
+    }
+
+    st->state = STATE_CERTIFICATE;
+
+    switch (st->cert_chain->TrustStatus.dwErrorStatus) {
+    case CERT_TRUST_NO_ERROR:
+	    error = 0;
+	    break;
+    case CERT_TRUST_IS_NOT_TIME_VALID:
+	    git_error_set(GIT_ERROR_SSL, "certificate time is not yet valid");
+	    error = GIT_ECERTIFICATE;
+	    break;
+    default:
+	    git_error_set(GIT_ERROR_SSL, "unknown certificate lookup failure: %d", st->cert_chain->TrustStatus.dwErrorStatus);
+	    error = -1;
+	    break;
+    }
+
+    if (error)
+	    return error;
+
+    ssl_policy_parameters.cbSize = sizeof(SSL_EXTRA_CERT_CHAIN_POLICY_PARA);
+    ssl_policy_parameters.dwAuthType = AUTHTYPE_SERVER;
+    ssl_policy_parameters.pwszServerName = L"wrong.host.badssl.com";
+
+    if (!CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, st->cert_chain, &cert_policy_parameters, &cert_policy_status)) {
+	    git_error_set(GIT_ERROR_OS, "could not verify certificate chain policy");
+	    return -1;
+    }
+
+    switch (cert_policy_status.dwError) {
+    case 0:
+	    error = 0;
+	    break;
+    default:
+	    git_error_set(GIT_ERROR_SSL, "unknown certificate policy checking failure: %d", cert_policy_status.dwError);
+	    error = -1;
+	    break;
+    }
+
+    return error;
+}
+
+static int schannel_connect(git_stream *stream)
+{
+    schannel_stream *st = (schannel_stream *)stream;
+    int error;
+
+    GIT_ASSERT(st->state == STATE_NONE);
+
+    if ((error = connect_context(st)) < 0 ||
+        (error = check_certificate(st)) < 0)
+	return error;
+
+    st->connected = 1;
+    return 0;
 }
 
 static int schannel_certificate(git_cert **out, git_stream *stream)
