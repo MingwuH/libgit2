@@ -729,4 +729,13 @@ extern int git_schannel_stream_wrap(
 	return schannel_stream_wrap(out, in, host, 0);
 }
 
+#else
+
+#include "stream.h"
+
+int git_schannel_stream_global_init(void)
+{
+	return 0;
+}
+
 #endif
