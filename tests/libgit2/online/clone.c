@@ -585,13 +585,8 @@ static int x509_succeed_certificate_check(git_cert *cert, int valid, const char 
 	GIT_UNUSED(valid);
 	GIT_UNUSED(payload);
 
-	printf("------------------------------------------------\n");
-
 	cl_assert_equal_s("github.com", host);
 	cl_assert_equal_i(GIT_CERT_X509, cert->cert_type);
-
-	printf("%" PRIuZ "\n", ((git_cert_x509 *)cert)->len);
-	printf("%.*s\n", ((git_cert_x509 *)cert)->len, ((git_cert_x509 *)cert)->data);
 
 	return 0;
 }
