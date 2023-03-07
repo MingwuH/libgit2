@@ -65,7 +65,10 @@ typedef struct {
     CredHandle cred;
     CtxtHandle context;
     SecPkgContext_StreamSizes stream_sizes;
+
+    CERT_CONTEXT *certificate;
     CERT_CHAIN_CONTEXT *cert_chain;
+    git_cert_x509 x509;
 
     git_str plaintext_in;
     git_str ciphertext_in;
@@ -341,26 +344,34 @@ static int set_certificate_validation_error(DWORD status)
 
 static int check_certificate(schannel_stream* st)
 {
-    const CERT_CONTEXT *certificate;
     CERT_CHAIN_PARA cert_chain_parameters = { sizeof(CERT_CHAIN_PARA), 0 };
     SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_policy_parameters;
     CERT_CHAIN_POLICY_PARA cert_policy_parameters = { sizeof(CERT_CHAIN_POLICY_PARA), 0, &ssl_policy_parameters };
     CERT_CHAIN_POLICY_STATUS cert_policy_status;
     int error = -1;
 
-    if (QueryContextAttributesW(&st->context, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &certificate) != SEC_E_OK) {
+    if (QueryContextAttributesW(&st->context, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &st->certificate) != SEC_E_OK) {
 	    git_error_set(GIT_ERROR_OS, "could not query remote certificate context");
 	    return -1;
     }
 
     /* TODO: do we really want to do revokcation checking ? */
     /* TODO: free cert_chain */
-    if (!CertGetCertificateChain(NULL, certificate, NULL, certificate->hCertStore, &cert_chain_parameters, CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, NULL, &st->cert_chain)) {
+    if (!CertGetCertificateChain(NULL, st->certificate, NULL, st->certificate->hCertStore, &cert_chain_parameters, CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, NULL, &st->cert_chain)) {
 	    git_error_set(GIT_ERROR_OS, "could not query remote certificate chain");
+	    CertFreeCertificateContext(st->certificate);
 	    return -1;
     }
 
     st->state = STATE_CERTIFICATE;
+
+    /* Set up the x509 certificate data for future callbacks */
+
+    st->x509.parent.cert_type = GIT_CERT_X509;
+    st->x509.data = st->certificate->pbCertEncoded;
+    st->x509.len = st->certificate->cbCertEncoded;
+
+    /* Handle initial certificate validation */
 
     if (st->cert_chain->TrustStatus.dwErrorStatus != CERT_TRUST_NO_ERROR)
 	return set_certificate_lookup_error(st->cert_chain->TrustStatus.dwErrorStatus);
@@ -397,6 +408,9 @@ static int schannel_connect(git_stream *stream)
 
 static int schannel_certificate(git_cert **out, git_stream *stream)
 {
+    schannel_stream *st = (schannel_stream *)stream;
+
+    *out = &st->x509.parent;
     return 0;
 }
 
@@ -637,8 +651,10 @@ static void schannel_free(git_stream *stream)
 {
     schannel_stream *st = (schannel_stream *)stream;
 
-    if (st->state >= STATE_CERTIFICATE)
+    if (st->state >= STATE_CERTIFICATE) {
+	CertFreeCertificateContext(st->certificate);
 	CertFreeCertificateChain(st->cert_chain);
+    }
 
     if (st->state >= STATE_CONTEXT)
 	DeleteSecurityContext(&st->context);
