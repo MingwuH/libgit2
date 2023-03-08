@@ -332,12 +332,14 @@ static int set_certificate_validation_error(DWORD status)
 
 static int check_certificate(schannel_stream* st)
 {
-	CERT_CHAIN_PARA cert_chain_parameters =
-		{ sizeof(CERT_CHAIN_PARA), 0 };
+	CERT_CHAIN_PARA cert_chain_parameters;
 	SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_policy_parameters;
 	CERT_CHAIN_POLICY_PARA cert_policy_parameters =
 		{ sizeof(CERT_CHAIN_POLICY_PARA), 0, &ssl_policy_parameters };
 	CERT_CHAIN_POLICY_STATUS cert_policy_status;
+
+	memset(&cert_chain_parameters, 0, sizeof(CERT_CHAIN_PARA));
+	cert_chain_parameters.cbSize = sizeof(CERT_CHAIN_PARA);
 
 	if (QueryContextAttributesW(&st->context,
 			SECPKG_ATTR_REMOTE_CERT_CONTEXT,
