@@ -35,7 +35,9 @@
 
 static void schannel_global_shutdown(void)
 {
+	printf("WSACleanup happening...\n");
 	WSACleanup();
+	printf("WSACleanup completed...\n");
 }
 
 int git_schannel_stream_global_init(void)
@@ -50,6 +52,8 @@ int git_schannel_stream_global_init(void)
 
 	tls_version = MAKEWORD(2, 2);
 
+	printf("WSAStartup happening\n");
+
 	if (WSAStartup(tls_version, &wsa_data) != 0) {
 		git_error_set(GIT_ERROR_OS, "could not initialize Windows Socket Library");
 		return -1;
@@ -60,6 +64,8 @@ int git_schannel_stream_global_init(void)
 		git_error_set(GIT_ERROR_SSL, "Windows Socket Library does not support Winsock 2.2");
 		return -1;
 	}
+
+	printf("WSAStartup succeeded\n");
 
 	return git_runtime_shutdown_register(schannel_global_shutdown);
 }
