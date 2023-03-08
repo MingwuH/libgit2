@@ -19,6 +19,18 @@
 #include "stream.h"
 #include "streams/socket.h"
 
+#ifndef SP_PROT_TLS1_2_CLIENT
+# define SP_PROT_TLS1_2_CLIENT 2048
+#endif
+
+#ifndef SP_PROT_TLS1_3_CLIENT
+# define SP_PROT_TLS1_3_CLIENT 8192
+#endif
+
+#ifndef SECBUFFER_ALERT
+# define SECBUFFER_ALERT 17
+#endif
+
 #define READ_BLOCKSIZE (16 * 1024)
 
 static void schannel_global_shutdown(void)
@@ -73,7 +85,7 @@ typedef struct {
 	SecPkgContext_StreamSizes stream_sizes;
 
 	CERT_CONTEXT *certificate;
-	CERT_CHAIN_CONTEXT *cert_chain;
+	const CERT_CHAIN_CONTEXT *cert_chain;
 	git_cert_x509 x509;
 
 	git_str plaintext_in;
@@ -326,7 +338,6 @@ static int check_certificate(schannel_stream* st)
 	CERT_CHAIN_POLICY_PARA cert_policy_parameters =
 		{ sizeof(CERT_CHAIN_POLICY_PARA), 0, &ssl_policy_parameters };
 	CERT_CHAIN_POLICY_STATUS cert_policy_status;
-	int error = -1;
 
 	if (QueryContextAttributesW(&st->context,
 			SECPKG_ATTR_REMOTE_CERT_CONTEXT,
