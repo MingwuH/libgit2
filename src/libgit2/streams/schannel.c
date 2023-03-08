@@ -492,7 +492,8 @@ static ssize_t schannel_write(
 	}
 
 done:
-    return total_len;
+	git_str_dispose(&ciphertext_out);
+	return total_len;
 }
 
 static ssize_t schannel_read(git_stream *stream, void *_data, size_t data_len)
