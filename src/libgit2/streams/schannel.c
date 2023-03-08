@@ -669,6 +669,10 @@ static void schannel_free(git_stream *stream)
 	git_str_dispose(&st->plaintext_in);
 
 	git__free(st->host_w);
+
+	if (st->owned)
+		git_stream_free(st->io);
+
 	git__free(st);
 }
 
