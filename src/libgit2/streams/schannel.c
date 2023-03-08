@@ -326,7 +326,7 @@ static int check_certificate(schannel_stream* st)
 	CERT_CHAIN_PARA cert_chain_parameters =
 		{ sizeof(CERT_CHAIN_PARA), 0 };
 	SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_policy_parameters;
-	CERT_CHAIN_POLICY_PARA cert_policy_parameters = {
+	CERT_CHAIN_POLICY_PARA cert_policy_parameters =
 		{ sizeof(CERT_CHAIN_POLICY_PARA), 0, &ssl_policy_parameters };
 	CERT_CHAIN_POLICY_STATUS cert_policy_status;
 	int error = -1;
