@@ -112,7 +112,7 @@ if(USE_HTTPS)
 		list(APPEND LIBGIT2_SYSTEM_LIBS "rpcrt4" "crypt32" "ole32" "secur32")
 		list(APPEND LIBGIT2_PC_LIBS "-lrpcrt4" "-lcrypt32" "-lole32" "-lsecur32")
 	elseif(USE_HTTPS STREQUAL "WinHTTP")
-		# WinHTTP setup was handled in the WinHTTP-specific block above
+		set(GIT_WINHTTP 1)
 	elseif(USE_HTTPS STREQUAL "OpenSSL-Dynamic")
 		set(GIT_OPENSSL 1)
 		set(GIT_OPENSSL_DYNAMIC 1)
