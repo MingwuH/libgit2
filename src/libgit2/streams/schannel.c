@@ -101,9 +101,7 @@ static int connect_context(schannel_stream *st)
 	               SCH_CRED_NO_SERVERNAME_CHECK;
 	cred.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT |
 	                             SP_PROT_TLS1_3_CLIENT;
-	cred.dwMinimumCipherStrength = 128; // TODO
 
-	/* TODO: do we need to pass an expiry timestamp? */
 	if (AcquireCredentialsHandleW(NULL, SCHANNEL_NAME_W,
 			SECPKG_CRED_OUTBOUND, NULL, &cred, NULL,
 			NULL, &st->cred, NULL) != SEC_E_OK) {
@@ -119,7 +117,6 @@ static int connect_context(schannel_stream *st)
 	                ISC_REQ_SEQUENCE_DETECT |
 	                ISC_REQ_STREAM;
 
-	/* TODO: do we need to pass an expiry timestamp? (last arg) */
 	for (retries = 0; retries < MAX_RETRIES; retries++) {
 		SecBuffer input_buf[] = {
 			{ (unsigned long)st->ciphertext_in.size,
