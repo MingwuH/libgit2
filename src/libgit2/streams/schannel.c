@@ -15,7 +15,6 @@
 #include <schannel.h>
 #include <sspi.h>
 
-#include "runtime.h"
 #include "stream.h"
 #include "streams/socket.h"
 
@@ -32,43 +31,6 @@
 #endif
 
 #define READ_BLOCKSIZE (16 * 1024)
-
-static void schannel_global_shutdown(void)
-{
-	printf("WSACleanup happening...\n");
-	WSACleanup();
-	printf("WSACleanup completed...\n");
-}
-
-int git_schannel_stream_global_init(void)
-{
-	WORD tls_version;
-	WSADATA wsa_data;
-
-	/*
-	 * TODO: this is process-global; allow callers to configure
-	 * it so that we don't overwrite their existing settings.
-	 */
-
-	tls_version = MAKEWORD(2, 2);
-
-	printf("WSAStartup happening\n");
-
-	if (WSAStartup(tls_version, &wsa_data) != 0) {
-		git_error_set(GIT_ERROR_OS, "could not initialize Windows Socket Library");
-		return -1;
-	}
-
-	if (LOBYTE(wsa_data.wVersion) != 2 ||
-	    HIBYTE(wsa_data.wVersion) != 2) {
-		git_error_set(GIT_ERROR_SSL, "Windows Socket Library does not support Winsock 2.2");
-		return -1;
-	}
-
-	printf("WSAStartup succeeded\n");
-
-	return git_runtime_shutdown_register(schannel_global_shutdown);
-}
 
 typedef enum {
 	STATE_NONE = 0,
@@ -748,15 +710,6 @@ extern int git_schannel_stream_wrap(
 	const char *host)
 {
 	return schannel_stream_wrap(out, in, host, 0);
-}
-
-#else
-
-#include "stream.h"
-
-int git_schannel_stream_global_init(void)
-{
-	return 0;
 }
 
 #endif

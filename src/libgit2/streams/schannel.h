@@ -11,8 +11,6 @@
 
 #include "git2/sys/stream.h"
 
-extern int git_schannel_stream_global_init(void);
-
 #ifdef GIT_SCHANNEL
 
 extern int git_schannel_stream_new(
