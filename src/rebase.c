@@ -551,7 +551,7 @@ static int rebase_ensure_not_dirty(
 
 	if (check_workdir) {
 		git_diff_options diff_opts = GIT_DIFF_OPTIONS_INIT;
-		diff_opts.ignore_submodules = GIT_SUBMODULE_IGNORE_UNTRACKED;
+		diff_opts.ignore_submodules = GIT_SUBMODULE_IGNORE_ALL;
 		if ((error = git_diff_index_to_workdir(&diff, repo, index, &diff_opts)) < 0)
 			goto done;
 
